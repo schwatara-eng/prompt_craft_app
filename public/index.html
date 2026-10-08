@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PROMPT CRAFT</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <p class="eyebrow">AI VIDEO WORKFLOW</p>
+      <h1>PROMPT CRAFT</h1>
+      <p class="intro">
+        주제를 입력하면 기획부터 스토리보드, 대본,
+        이미지·영상 프롬프트까지 한 번에 정리해줘.
+      </p>
+    </header>
+
+    <section class="input-panel">
+      <label>
+        <span>뉴스 / 콘텐츠 주제 또는 키워드</span>
+        <textarea id="topic" rows="5"
+          placeholder="예: 폭염 속 야외 노동자 안전 문제"></textarea>
+      </label>
+
+      <div class="input-row">
+        <label>
+          <span>영상 분위기 / 장르</span>
+          <select id="genre">
+            <option>정보형</option>
+            <option>뉴스 리포트</option>
+            <option>다큐멘터리</option>
+            <option>감성형</option>
+            <option>시네마틱</option>
+            <option>교육형</option>
+          </select>
+        </label>
+
+        <label>
+          <span>영상 길이</span>
+          <select id="duration">
+            <option value="30">30초</option>
+            <option value="60" selected>60초</option>
+            <option value="90">90초</option>
+          </select>
+        </label>
+      </div>
+
+      <button id="generateBtn">제작안 만들기</button>
+      <p id="status" class="status"></p>
+    </section>
+
+    <section id="results" class="results hidden">
+      <nav id="tabs" class="tabs"></nav>
+      <article class="result-card">
+        <div class="result-head">
+          <h2 id="resultTitle"></h2>
+          <button id="copyBtn" class="copy-btn">복사</button>
+        </div>
+        <pre id="resultText"></pre>
+      </article>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
