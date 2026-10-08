@@ -20,7 +20,9 @@ async function callOpenRouter(prompt) {
     throw new Error("OPENROUTER_API_KEY가 설정되지 않았어. .env 파일을 확인해줘.");
   }
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  let response;
+  try {
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
@@ -31,8 +33,13 @@ async function callOpenRouter(prompt) {
       messages: [{ role: "user", content: prompt }],
       temperature: 0.6,
       max_tokens: 8192
-    })
-  });
+    }),
+    signal: AbortSignal.timeout(90000)
+    });
+  } catch (error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") throw new Error("AI 응답이 90초를 초과했어. 잠시 후 다시 시도해줘.");
+    throw error;
+  }
 
   const raw = await response.text();
   let data;
@@ -72,57 +79,46 @@ async function callOpenRouter(prompt) {
   최종 결과 정리
 */
 app.post("/api/generate", async (req, res) => {
+  const { topic, genre, duration } = req.body || {};
+  if (typeof topic !== "string" || !topic.trim()) {
+    return res.status(400).json({ error: "주제를 입력해줘." });
+  }
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  const send = (type, payload) => {
+    if (!res.destroyed) res.write(JSON.stringify({ type, ...payload }) + "\n");
+  };
+  const input = {
+    topic: topic.trim(),
+    genre: typeof genre === "string" && genre.trim() ? genre.trim() : "정보형",
+    duration: Number(duration) || 60
+  };
+  const p = buildPrompts(input);
   try {
-    const { topic, genre, duration } = req.body;
-
-    if (!topic?.trim()) {
-      return res.status(400).json({ error: "주제를 입력해줘." });
-    }
-
-    const input = {
-      topic: topic.trim(),
-      genre: genre?.trim() || "정보형",
-      duration: Number(duration) || 60
-    };
-
-    const p = buildPrompts(input);
-
-    // 1. 핵심 내용 정리
+    send("progress", { step: 1, label: "핵심 내용 분석 중" });
     const core = await callOpenRouter(p.core());
-
-    // 2. 콘텐츠 기획구성
+    send("progress", { step: 2, label: "콘텐츠 기획안 작성 중" });
     const plan = await callOpenRouter(p.plan(core));
-
-    // 3. 스토리보드
+    send("progress", { step: 3, label: "스토리보드 생성 중" });
     const storyboard = await callOpenRouter(p.storyboard(core, plan));
-
-    // 4. 스토리보드 이후 작업은 서로 독립적이므로 병렬 실행
+    send("progress", { step: 4, label: "대본·이미지·영상 프롬프트 생성 중" });
     const [script, imagePrompts, videoPrompts] = await Promise.all([
       callOpenRouter(p.script(plan, storyboard)),
       callOpenRouter(p.imagePrompts(plan, storyboard)),
       callOpenRouter(p.videoPrompts(plan, storyboard))
     ]);
-
-    // 5. 내레이션은 완성 대본을 받아 생성
+    send("progress", { step: 5, label: "내레이션 프롬프트 생성 중" });
     const narration = await callOpenRouter(p.narration(script));
-
-    // 6. Opal의 '최종 결과 정리' 노드 역할
-    // AI가 앞 결과를 다시 왜곡하지 않도록 웹앱 v1에서는 코드로 묶는다.
-    const result = {
-      input,
-      core,
-      plan,
-      storyboard,
-      script,
-      imagePrompts,
-      videoPrompts,
-      narration
-    };
-
-    res.json(result);
+    send("progress", { step: 6, label: "최종 결과 정리 중" });
+    send("result", { data: { input, core, plan, storyboard, script, imagePrompts, videoPrompts, narration } });
+    send("progress", { step: 7, label: "제작 완료" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: error.message || "서버 오류가 발생했어." });
+    send("error", { message: error.message || "서버 오류가 발생했어." });
+  } finally {
+    res.end();
   }
 });
 

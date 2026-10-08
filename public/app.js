@@ -46,7 +46,75 @@ function renderCurrent() {
   if (!section) return;
 
   resultTitleEl.textContent = section[1];
-  resultTextEl.textContent = generated[currentKey] || "";
+  renderMarkdown(resultTextEl, generated[currentKey] || "");
+}
+
+const progressEl = document.createElement("div");
+progressEl.className = "progress-panel hidden";
+progressEl.setAttribute("aria-live", "polite");
+statusEl.insertAdjacentElement("afterend", progressEl);
+const stepLabels = ["핵심 내용 분석", "콘텐츠 기획안", "스토리보드", "대본·이미지·영상 프롬프트", "내레이션", "최종 정리", "제작 완료"];
+
+function showProgress(step, label) {
+  progressEl.classList.remove("hidden");
+  progressEl.replaceChildren();
+  const heading = document.createElement("p");
+  heading.className = "progress-heading";
+  heading.textContent = `${step}/7 · ${label}`;
+  progressEl.appendChild(heading);
+  const list = document.createElement("ol");
+  list.className = "progress-steps";
+  stepLabels.forEach((name, index) => {
+    const item = document.createElement("li");
+    item.textContent = name;
+    item.className = index + 1 < step ? "done" : index + 1 === step ? "active" : "";
+    list.appendChild(item);
+  });
+  progressEl.appendChild(list);
+}
+
+function renderMarkdown(target, source) {
+  target.replaceChildren();
+  const lines = String(source).replace(/\\r/g, "").split("\\n");
+  let list = null;
+  const inline = (element, value) => {
+    // textContent prevents model-generated HTML from executing.
+    const parts = value.split(/(\\*\\*[^*]+\\*\\*)/g);
+    parts.forEach(part => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        const strong = document.createElement("strong");
+        strong.textContent = part.slice(2, -2);
+        element.appendChild(strong);
+      } else element.appendChild(document.createTextNode(part));
+    });
+  };
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (!trimmed) { list = null; return; }
+    const heading = trimmed.match(/^(#{1,4})\\s+(.+)$/);
+    if (heading) {
+      list = null;
+      const h = document.createElement("h" + Math.min(heading[1].length + 1, 5));
+      inline(h, heading[2]);
+      target.appendChild(h);
+      return;
+    }
+    const bullet = trimmed.match(/^(?:[-*]\\s+|\\d+[.)]\\s+)(.+)$/);
+    if (bullet) {
+      if (!list) {
+        list = document.createElement("ul");
+        target.appendChild(list);
+      }
+      const li = document.createElement("li");
+      inline(li, bullet[1]);
+      list.appendChild(li);
+      return;
+    }
+    list = null;
+    const p = document.createElement("p");
+    inline(p, trimmed);
+    target.appendChild(p);
+  });
 }
 
 generateBtn.addEventListener("click", async () => {
@@ -63,34 +131,54 @@ generateBtn.addEventListener("click", async () => {
   statusEl.textContent =
     "핵심 내용 → 기획 → 스토리보드 → 제작 프롬프트 순서로 생성하고 있어.";
 
+  showProgress(1, "서버 연결 중");
+  resultsEl.classList.add("hidden");
   try {
     const response = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        topic,
-        genre: genreEl.value,
-        duration: Number(durationEl.value)
-      })
+      body: JSON.stringify({ topic, genre: genreEl.value, duration: Number(durationEl.value) })
     });
-
-    const data = await response.json();
-
     if (!response.ok) {
-      throw new Error(data.error || "생성에 실패했어.");
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${response.status}`);
     }
-
-    generated = data;
-    currentKey = "plan";
-
-    renderTabs();
-    renderCurrent();
-
-    resultsEl.classList.remove("hidden");
+    if (!response.body) throw new Error("응답 스트림이 없어.");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let completed = false;
+    function processLine(line) {
+      if (!line.trim()) return;
+      const msg = JSON.parse(line);
+      if (msg.type === "progress") {
+        showProgress(msg.step, msg.label);
+        statusEl.textContent = msg.label;
+      } else if (msg.type === "error") {
+        throw new Error(msg.message);
+      } else if (msg.type === "result") {
+        generated = msg.data;
+        completed = true;
+        currentKey = "plan";
+        renderTabs();
+        renderCurrent();
+        resultsEl.classList.remove("hidden");
+      }
+    }
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      lines.forEach(processLine);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) processLine(buffer);
+    if (!completed) throw new Error("제작 결과가 도착하지 않았어.");
     statusEl.textContent = "완료.";
-    resultsEl.scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
-    statusEl.textContent = error.message;
+    statusEl.textContent = `오류: ${error.message}`;
   } finally {
     generateBtn.disabled = false;
     generateBtn.textContent = "제작안 만들기";
