@@ -486,175 +486,147 @@ copyBtn.addEventListener("click", async () => {
 
 
 /* ================================================
-   PROMPT CRAFT — CODE SNOW / AVALANCHE
-   Separate transparent canvas above the interface.
-   Does not change API calls or production workflow.
+   PROMPT CRAFT — CODE SNOW v2
+   Filled piles, correct title bounds, slower avalanches
    ================================================ */
 (() => {
-  const oldRain = document.getElementById('digital-rain');
-  if (!oldRain) return;
+  const rain = document.getElementById('digital-rain');
+  if (!rain) return;
   const layer = document.createElement('canvas');
   layer.id = 'code-snow';
   layer.setAttribute('aria-hidden', 'true');
   document.body.appendChild(layer);
   const ctx = layer.getContext('2d');
   if (!ctx) return;
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const glyphs = '01{}[]<>/AI';
   const cell = 10;
-  const flakeCount = window.innerWidth < 700 ? 42 : 100;
-  let W = 0, H = 0, flakes = [], slides = [], surfaces = [];
-  let raf = null, previous = 0, accumulator = 0;
-  const pick = () => glyphs[Math.floor(Math.random() * glyphs.length)];
-  const random = (a, b) => a + Math.random() * (b - a);
+  const choose = () => glyphs[Math.floor(Math.random() * glyphs.length)];
+  const rand = (a,b) => a + Math.random() * (b-a);
+  let W=0,H=0,flakes=[],slides=[],surfaces=[],raf=null,last=0,frame=0;
 
-  function findSurfaces() {
-    const targets = [document.querySelector('.hero h1') || document.querySelector('h1'),
-                     document.querySelector('.input-panel')];
-    return targets.filter(Boolean).map((el, index) => {
-      const r = el.getBoundingClientRect();
-      const left = Math.max(0, r.left + (index === 0 ? 4 : 12));
-      const right = Math.min(W, r.right - (index === 0 ? 4 : 12));
-      const n = Math.max(1, Math.floor((right - left) / cell));
-      const previousSurface = surfaces[index];
-      const same = previousSurface && previousSurface.n === n && previousSurface.el === el;
-      return {el, left, right, top: r.top, bottom: r.bottom, n,
-        heights: same ? previousSurface.heights : new Array(n).fill(0),
-        chars: same ? previousSurface.chars : Array.from({length:n},()=>[]),
-        maxHeight: index === 0 ? 6 : 9,
-        center: (n - 1) / 2};
-    }).filter(s => s.right > s.left && s.top < H + 150 && s.bottom > -150);
+  function getSurfaces() {
+    const h1 = document.querySelector('.hero h1') || document.querySelector('h1');
+    const panel = document.querySelector('.input-panel');
+    const targets = [h1,panel].filter(Boolean);
+    return targets.map(el => {
+      const isTitle = el === h1;
+      // Range gives the bounds of the actual title text, not the entire block.
+      let r = el.getBoundingClientRect();
+      if (isTitle && el.firstChild && el.firstChild.nodeType === Node.TEXT_NODE) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const textRect = range.getBoundingClientRect();
+        if (textRect.width > 0) r = textRect;
+      }
+      const inset = isTitle ? 1 : 8;
+      const left = Math.max(0,r.left+inset), right = Math.min(W,r.right-inset);
+      const n = Math.max(1,Math.floor((right-left)/cell));
+      const old = surfaces.find(s=>s.el===el && s.n===n);
+      const top = r.top + (isTitle ? 3 : 0);
+      return {el,left,right,top,bottom:r.bottom,n,isTitle,
+        heights:old?old.heights:new Array(n).fill(0),
+        chars:old?old.chars:Array.from({length:n},()=>[]),
+        maxHeight:isTitle?7:16,
+        center:(n-1)/2};
+    }).filter(s=>s.right>s.left && s.top<H+100 && s.bottom>-100);
   }
-
   function reset() {
-    const dpr = Math.min(devicePixelRatio || 1, 2);
-    W = innerWidth; H = innerHeight;
-    layer.width = Math.round(W * dpr);
-    layer.height = Math.round(H * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    surfaces = [];
-    flakes = Array.from({length: flakeCount}, () => ({
-      x: random(0,W), y: random(-H, H), vx: random(-0.2,0.2),
-      vy: random(0.6,1.3), char: pick(), alpha: random(.45,.85)
-    }));
-    slides = [];
+    const dpr=Math.min(devicePixelRatio||1,2);
+    W=innerWidth;H=innerHeight;
+    layer.width=Math.round(W*dpr);layer.height=Math.round(H*dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    surfaces=[];surfaces=getSurfaces();slides=[];
+    const count=W<700?110:240;
+    flakes=Array.from({length:count},()=>({x:rand(0,W),y:rand(-H,H),vy:rand(.65,1.35),vx:rand(-.16,.16),char:choose(),alpha:rand(.45,.85)}));
   }
-  function respawn(f) {
-    f.x = random(0,W); f.y = random(-90,-10);
-    f.vx = random(-.2,.2); f.vy = random(.6,1.3);
-    f.char = pick();
+  function spawn(f) {
+    const panel=surfaces.find(s=>!s.isTitle);
+    const title=surfaces.find(s=>s.isTitle);
+    const target=Math.random()<.68?panel:(Math.random()<.75?title:null);
+    f.x=target?rand(target.left+3,target.right-3):rand(0,W);
+    f.y=rand(-H*.45,-12);
+    f.vx=rand(-.14,.14);f.vy=rand(.7,1.35);f.char=choose();
   }
-  function avalanche(s, col) {
-    if (col < 0 || col >= s.n || s.heights[col] === 0) return;
+  function release(s,col) {
+    if(col<0||col>=s.n||!s.heights[col])return;
     s.heights[col]--;
-    const char = s.chars[col].pop() || pick();
-    const x = s.left + (col + .5) * cell;
-    const y = s.top - (s.heights[col] + 1) * cell;
-    const dir = col < s.center ? -1 : 1;
-    slides.push({x,y,vx:dir*random(.8,1.8),vy:random(-.3,.3),char,life:110});
+    const char=s.chars[col].pop()||choose();
+    const dir=col<s.center?-1:1;
+    slides.push({x:s.left+(col+.5)*cell,y:s.top-(s.heights[col]+1)*cell,
+      vx:dir*rand(.8,1.5),vy:rand(-.25,.1),char,life:160});
   }
-  function settle(s, x, char) {
-    const col = Math.floor((x - s.left) / cell);
-    if (col < 0 || col >= s.n) return;
-    // Snow starts as a filled mound near the center, then grows outward.
-    const dist = Math.abs(col - s.center) / Math.max(1,s.center);
-    const allowed = Math.max(1, Math.round(s.maxHeight * (1 - dist * .83)));
-    if (s.heights[col] >= allowed) {
-      // A full slope sheds snow to the nearest downhill side.
-      avalanche(s,col);
+  function settle(s,x,char) {
+    let col=Math.floor((x-s.left)/cell);
+    if(col<0||col>=s.n)return;
+    // Deposit onto the lower neighboring stack; this makes a dense filled surface.
+    const options=[col-1,col,col+1].filter(i=>i>=0&&i<s.n);
+    col=options.reduce((best,i)=>s.heights[i]<s.heights[best]?i:best,col);
+    const distance=Math.abs(col-s.center)/Math.max(1,s.center);
+    const limit=Math.max(2,Math.round(s.maxHeight*(1-.87*distance)));
+    if(s.heights[col]>=limit){
+      // Only overflow at a full pile, not on every arriving character.
+      if(Math.random()<.12) release(s,col);
       return;
     }
-    s.heights[col]++;
-    s.chars[col].push(char);
+    s.chars[col].push(char);s.heights[col]++;
   }
-  function evolvePile(s) {
-    // Each column is a solid stack of individual characters (not an outline).
-    // When the gradient becomes steep, one cell slides downhill.
-    for (let i = 0; i < 3; i++) {
-      const col = Math.floor(random(0,s.n));
-      const h = s.heights[col];
-      if (!h) continue;
-      const side = col < s.center ? -1 : 1;
-      const next = col + side;
-      if (next < 0 || next >= s.n) { if (h > 1) avalanche(s,col); continue; }
-      if (h - s.heights[next] >= 3 || h > s.maxHeight) {
-        const char = s.chars[col].pop() || pick();
-        s.heights[col]--;
-        if (s.heights[next] < s.maxHeight) {
-          s.chars[next].push(char); s.heights[next]++;
-        } else avalanche(s,col);
-      }
+  function evolve(s) {
+    // Avalanche only after a genuinely tall mound has formed.
+    const peak=Math.max(...s.heights);
+    if(peak<s.maxHeight-1 || frame%5!==0)return;
+    const col=Math.floor(rand(0,s.n));
+    const dir=col<s.center?-1:1,next=col+dir;
+    if(next<0||next>=s.n){if(s.heights[col]>1)release(s,col);return;}
+    if(s.heights[col]-s.heights[next]>=3){
+      const ch=s.chars[col].pop()||choose();s.heights[col]--;
+      if(s.heights[next]<s.maxHeight){s.chars[next].push(ch);s.heights[next]++;}
+      else release(s,col);
     }
-    // Intermittent small collapses after the peak reaches its threshold.
-    const mid = Math.floor(s.center);
-    if (s.heights[mid] >= s.maxHeight && Math.random() < .09) {
-      for (let i=0;i<3;i++) avalanche(s,Math.max(0,Math.min(s.n-1,mid+Math.floor(random(-3,4)))));
+    if(frame%35===0 && Math.random()<.4){
+      const edge=Math.random()<.5?0:s.n-1;
+      for(let i=0;i<3;i++)release(s,Math.max(0,Math.min(s.n-1,edge+(edge===0?i:-i))));
     }
   }
   function tick() {
-    surfaces = findSurfaces();
-    for (const s of surfaces) evolvePile(s);
-    for (const f of flakes) {
-      const oldY = f.y;
-      f.x += f.vx; f.y += f.vy * 2;
-      let landed = false;
-      for (const s of surfaces) {
-        if (f.x < s.left || f.x >= s.right) continue;
-        const col = Math.floor((f.x-s.left)/cell);
-        const peak = s.top - s.heights[col]*cell;
-        if (oldY <= peak && f.y >= peak) {
-          settle(s,f.x,f.char); respawn(f); landed = true; break;
-        }
+    frame++;
+    surfaces=getSurfaces();
+    for(const s of surfaces)evolve(s);
+    for(const f of flakes){
+      const oldY=f.y;f.x+=f.vx;f.y+=f.vy*2;
+      let landed=false;
+      for(const s of surfaces){
+        if(f.x<s.left||f.x>=s.right)continue;
+        const col=Math.floor((f.x-s.left)/cell);
+        if(col<0||col>=s.n)continue;
+        const peak=s.top-s.heights[col]*cell;
+        if(oldY<=peak&&f.y>=peak){settle(s,f.x,f.char);spawn(f);landed=true;break;}
       }
-      if (!landed && (f.y > H+20 || f.x < 0 || f.x > W)) respawn(f);
+      if(!landed&&(f.y>H+20||f.x<0||f.x>W))spawn(f);
     }
-    for (let i=slides.length-1;i>=0;i--) {
-      const p = slides[i];
-      p.vy = Math.min(p.vy + .085,3.2);
-      p.x += p.vx; p.y += p.vy; p.life--;
-      if (p.life <= 0 || p.y > H+20) slides.splice(i,1);
+    for(let i=slides.length-1;i>=0;i--){
+      const p=slides[i];p.vy=Math.min(p.vy+.09,3.8);
+      p.x+=p.vx;p.y+=p.vy;p.life--;
+      if(p.life<=0||p.y>H+20)slides.splice(i,1);
     }
   }
-  function draw() {
+  function draw(){
     ctx.clearRect(0,0,W,H);
-    ctx.font = `${cell}px monospace`;
-    ctx.textAlign = 'center';
-    // Falling flakes are masked out inside the opaque input panel.
-    for (const f of flakes) {
-      if (surfaces.some(s => f.x > s.left && f.x < s.right && f.y > s.top && f.y < s.bottom)) continue;
-      ctx.fillStyle = `rgba(57,187,209,${f.alpha})`;
-      ctx.fillText(f.char,f.x,f.y);
+    ctx.font=`${cell}px monospace`;ctx.textAlign='center';
+    for(const f of flakes){
+      if(surfaces.some(s=>f.x>s.left&&f.x<s.right&&f.y>s.top&&f.y<s.bottom))continue;
+      ctx.fillStyle=`rgba(57,187,209,${f.alpha})`;ctx.fillText(f.char,f.x,f.y);
     }
-    for (const s of surfaces) {
-      for (let col=0;col<s.n;col++) {
-        for (let row=0;row<s.heights[col];row++) {
-          ctx.fillStyle = row === s.heights[col]-1 ? '#9cecff' : 'rgba(57,187,209,.86)';
-          ctx.fillText(s.chars[col][row] || '0',s.left+(col+.5)*cell,s.top-(row+.2)*cell);
-        }
-      }
+    for(const s of surfaces)for(let col=0;col<s.n;col++)for(let row=0;row<s.heights[col];row++){
+      ctx.fillStyle=row===s.heights[col]-1?'#9cecff':'rgba(57,187,209,.85)';
+      ctx.fillText(s.chars[col][row]||'0',s.left+(col+.5)*cell,s.top-(row+.2)*cell);
     }
-    for (const p of slides) {
-      ctx.fillStyle = 'rgba(92,220,240,.9)';
-      ctx.fillText(p.char,p.x,p.y);
-    }
+    for(const p of slides){ctx.fillStyle='rgba(92,220,240,.9)';ctx.fillText(p.char,p.x,p.y);}
   }
-  function animate(now) {
-    raf = requestAnimationFrame(animate);
-    if (now-previous < 33) return;
-    previous = now;
-    tick(); draw();
-  }
-  function restart() {
-    if (raf !== null) cancelAnimationFrame(raf);
-    raf = null;
-    reset();
-    if (!reduceMotion.matches && !document.hidden) raf = requestAnimationFrame(animate);
-  }
+  function animate(now){raf=requestAnimationFrame(animate);if(now-last<33)return;last=now;tick();draw();}
+  function restart(){if(raf!==null)cancelAnimationFrame(raf);raf=null;reset();if(!reduced.matches&&!document.hidden)raf=requestAnimationFrame(animate);}
   addEventListener('resize',restart);
-  document.addEventListener('visibilitychange',()=>{
-    if (document.hidden) {if(raf!==null) cancelAnimationFrame(raf);raf=null;}
-    else restart();
-  });
-  reduceMotion.addEventListener('change',restart);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){if(raf!==null)cancelAnimationFrame(raf);raf=null;}else restart();});
+  reduced.addEventListener('change',restart);
   restart();
 })();
