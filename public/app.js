@@ -576,9 +576,9 @@ copyBtn.addEventListener("click", async () => {
     return {x,y,vx:rand(-.12,.12),vy:rand(.75,1.45),angle:rand(-.45,.45),spin:rand(-.008,.008),size:rand(8,12),char:glyph(),alpha:rand(.45,.9)};
   }
   function respawn(p) {
-    const t=Math.random()<.77?targets.find(t=>t.id==='panel'):(Math.random()<.6?targets.find(t=>t.id==='eyebrow'):targets.find(t=>t.id==='title'));
-    const valid=t?t.cols.map((v,i)=>v===null?-1:i).filter(i=>i>=0):[];
-    p.x=valid.length?t.left+(valid[Math.floor(Math.random()*valid.length)]+.5)*STEP:rand(0,W);
+    // Keep rainfall uniform across the entire viewport, independent of collisions.
+    // Previously 77% of respawns were forced above the input panel.
+    p.x=rand(0,W);
     p.y=rand(-H*.6,-15);p.vx=rand(-.12,.12);p.vy=rand(.8,1.5);
     p.char=glyph();p.angle=rand(-.5,.5);p.spin=rand(-.01,.01);
   }
