@@ -384,3 +384,13 @@ header p,
 .kicker {
   color: #39bbd1 !important;
 }
+
+/* CODE SNOW — overlay only, clicks pass through */
+#code-snow {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 20;
+  pointer-events: none;
+}
