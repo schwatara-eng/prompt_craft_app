@@ -353,3 +353,133 @@ copyBtn.addEventListener("click", async () => {
   copyBtn.textContent = "복사됨";
   setTimeout(() => (copyBtn.textContent = old), 1200);
 });
+
+
+/* =========================================
+   PROMPT CRAFT — CYBER CYAN DIGITAL RAIN
+   ========================================= */
+
+(() => {
+  const canvas = document.getElementById("digital-rain");
+
+  if (!canvas) return;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const config = {
+    fontSize: 15,
+    columnGap: 24,
+    speed: 0.35,
+    color: "57, 187, 209",
+    fade: 0.12,
+    opacity: 0.85,
+    fps: 30
+  };
+
+  const characters =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789{}[]<>/+=*";
+
+  const reducedMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)"
+  );
+
+  let columns = [];
+  let width = 0;
+  let height = 0;
+  let animationId = null;
+  let lastFrame = 0;
+
+  function resizeCanvas() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+    width = window.innerWidth;
+    height = window.innerHeight;
+
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const gap = width < 768 ? 30 : config.columnGap;
+    const count = Math.ceil(width / gap);
+
+    columns = Array.from({ length: count }, (_, i) => ({
+      x: i * gap,
+      y: Math.random() * height - height,
+      speed: 0.5 + Math.random() * 0.5,
+      brightness: 0.35 + Math.random() * 0.55
+    }));
+
+    ctx.fillStyle = "#070d12";
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function draw(timestamp = 0) {
+    animationId = requestAnimationFrame(draw);
+
+    if (timestamp - lastFrame < 1000 / config.fps) return;
+
+    lastFrame = timestamp;
+
+    ctx.fillStyle = `rgba(7, 13, 18, ${config.fade})`;
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.font = `${config.fontSize}px monospace`;
+    ctx.textAlign = "left";
+
+    columns.forEach((column) => {
+      const char = characters[
+        Math.floor(Math.random() * characters.length)
+      ];
+
+      const alpha =
+        column.brightness * config.opacity;
+
+      ctx.fillStyle =
+        `rgba(${config.color}, ${alpha})`;
+
+      ctx.fillText(char, column.x, column.y);
+
+      column.y +=
+        config.fontSize * column.speed * config.speed;
+
+      if (column.y > height + config.fontSize * 10) {
+        column.y = -Math.random() * height * 0.5;
+      }
+    });
+  }
+
+  function start() {
+    if (animationId !== null) {
+      cancelAnimationFrame(animationId);
+      animationId = null;
+    }
+
+    resizeCanvas();
+
+    if (reducedMotion.matches) {
+      // 정지된 배경을 유지
+      return;
+    }
+
+    animationId = requestAnimationFrame(draw);
+  }
+
+  window.addEventListener("resize", start);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (animationId !== null) {
+        cancelAnimationFrame(animationId);
+        animationId = null;
+      }
+    } else {
+      start();
+    }
+  });
+
+  reducedMotion.addEventListener("change", start);
+
+  start();
+})();
