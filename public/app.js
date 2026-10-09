@@ -485,13 +485,12 @@ copyBtn.addEventListener("click", async () => {
 })();
 
 
-/* ================================================
-   PROMPT CRAFT — CODE SNOW v2
-   Filled piles, correct title bounds, slower avalanches
-   ================================================ */
+/* ==================================================
+   CODE SNOW v4 — rotated glyph objects and true text silhouettes
+   ================================================== */
 (() => {
-  const rain = document.getElementById('digital-rain');
-  if (!rain) return;
+  const base = document.getElementById('digital-rain');
+  if (!base || document.getElementById('code-snow')) return;
   const layer = document.createElement('canvas');
   layer.id = 'code-snow';
   layer.setAttribute('aria-hidden', 'true');
@@ -499,134 +498,202 @@ copyBtn.addEventListener("click", async () => {
   const ctx = layer.getContext('2d');
   if (!ctx) return;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  const glyphs = '01{}[]<>/AI';
-  const cell = 10;
-  const choose = () => glyphs[Math.floor(Math.random() * glyphs.length)];
-  const rand = (a,b) => a + Math.random() * (b-a);
-  let W=0,H=0,flakes=[],slides=[],surfaces=[],raf=null,last=0,frame=0;
+  const chars = '01{}[]<>/AI';
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const glyph = () => chars[Math.floor(Math.random() * chars.length)];
+  const SIZE = 9, STEP = 8;
+  let W, H, targets = [], falling = [], debris = [], raf = 0, last = 0, frame = 0;
+  const off = document.createElement('canvas');
+  const maskCtx = off.getContext('2d', {willReadFrequently:true});
 
-  function getSurfaces() {
-    const h1 = document.querySelector('.hero h1') || document.querySelector('h1');
-    const panel = document.querySelector('.input-panel');
-    const targets = [h1,panel].filter(Boolean);
-    return targets.map(el => {
-      const isTitle = el === h1;
-      // Range gives the bounds of the actual title text, not the entire block.
-      let r = el.getBoundingClientRect();
-      if (isTitle && el.firstChild && el.firstChild.nodeType === Node.TEXT_NODE) {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        const textRect = range.getBoundingClientRect();
-        if (textRect.width > 0) r = textRect;
-      }
-      const inset = isTitle ? 1 : 8;
-      const left = Math.max(0,r.left+inset), right = Math.min(W,r.right-inset);
-      const n = Math.max(1,Math.floor((right-left)/cell));
-      const old = surfaces.find(s=>s.el===el && s.n===n);
-      const top = r.top + (isTitle ? 3 : 0);
-      return {el,left,right,top,bottom:r.bottom,n,isTitle,
-        heights:old?old.heights:new Array(n).fill(0),
-        chars:old?old.chars:Array.from({length:n},()=>[]),
-        maxHeight:isTitle?7:16,
-        center:(n-1)/2};
-    }).filter(s=>s.right>s.left && s.top<H+100 && s.bottom>-100);
+  function bounds(el) {
+    const r = el.getBoundingClientRect();
+    return {left:r.left, right:r.right, top:r.top, bottom:r.bottom, width:r.width, height:r.height};
   }
-  function reset() {
+  function textProfile(el, type) {
+    const r = bounds(el);
+    if (!r.width || !r.height) return null;
+    const cs = getComputedStyle(el);
+    const text = el.textContent.trim();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const tr = range.getBoundingClientRect();
+    const left = Math.max(0, tr.left), right = Math.min(W, tr.right);
+    if (right <= left) return null;
+    const n = Math.max(1, Math.ceil((right-left)/STEP));
+    const fontSize = parseFloat(cs.fontSize);
+    const fontWeight = cs.fontWeight;
+    const fontFamily = cs.fontFamily;
+    const letterSpacing = parseFloat(cs.letterSpacing) || 0;
+    const maskW = Math.ceil(tr.width)+12, maskH = Math.ceil(r.height)+20;
+    off.width = maskW; off.height = maskH;
+    maskCtx.clearRect(0,0,maskW,maskH);
+    maskCtx.fillStyle = '#fff';
+    maskCtx.textBaseline = 'alphabetic';
+    maskCtx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    // Canvas letterSpacing is supported in current Chromium; fallback remains usable.
+    if ('letterSpacing' in maskCtx) maskCtx.letterSpacing = `${letterSpacing}px`;
+    // Use the actual glyph pixel bounds instead of the line-height rectangle.
+    const metric = maskCtx.measureText(text);
+    const textHeight = metric.actualBoundingBoxAscent + metric.actualBoundingBoxDescent;
+    const baseline = Math.min(maskH-2, Math.max(textHeight+1, (r.height-textHeight)/2 + metric.actualBoundingBoxAscent + 8));
+    maskCtx.fillText(text, 4, baseline);
+    const pixels = maskCtx.getImageData(0,0,maskW,maskH).data;
+    const cols=[];
+    for(let i=0;i<n;i++) {
+      const x=left+(i+.5)*STEP;
+      const px=Math.min(maskW-1,Math.max(0,Math.floor(x-tr.left+4)));
+      let first=-1;
+      for(let y=0;y<maskH;y++) {
+        if(pixels[(y*maskW+px)*4+3]>70){first=y;break;}
+      }
+      cols.push(first<0?null:r.top-8+first);
+    }
+    return {id:type, el, left, right, n, cols, cap:type==='eyebrow'?6:2};
+  }
+  function panelProfile(el) {
+    const r=bounds(el), left=Math.max(0,r.left+7), right=Math.min(W,r.right-7);
+    const n=Math.max(1,Math.floor((right-left)/STEP));
+    return {id:'panel',el,left,right,n,cols:Array(n).fill(r.top),cap:18};
+  }
+  function updateTargets() {
+    const eyebrow=document.querySelector('.hero .eyebrow');
+    const title=document.querySelector('.hero h1')||document.querySelector('h1');
+    const panel=document.querySelector('.input-panel');
+    const old=new Map(targets.map(t=>[t.id,t]));
+    const next=[];
+    for(const [el,type] of [[eyebrow,'eyebrow'],[title,'title'],[panel,'panel']]) {
+      if(!el)continue;
+      const t=type==='panel'?panelProfile(el):textProfile(el,type);
+      if(!t)continue;
+      const prior=old.get(type);
+      t.stacks=prior&&prior.n===t.n?prior.stacks:Array.from({length:t.n},()=>[]);
+      next.push(t);
+    }
+    targets=next;
+  }
+  function makeParticle(x=rand(0,W),y=rand(-H,0)) {
+    return {x,y,vx:rand(-.12,.12),vy:rand(.75,1.45),angle:rand(-.45,.45),spin:rand(-.008,.008),size:rand(8,12),char:glyph(),alpha:rand(.45,.9)};
+  }
+  function respawn(p) {
+    const t=Math.random()<.77?targets.find(t=>t.id==='panel'):(Math.random()<.6?targets.find(t=>t.id==='eyebrow'):targets.find(t=>t.id==='title'));
+    const valid=t?t.cols.map((v,i)=>v===null?-1:i).filter(i=>i>=0):[];
+    p.x=valid.length?t.left+(valid[Math.floor(Math.random()*valid.length)]+.5)*STEP:rand(0,W);
+    p.y=rand(-H*.6,-15);p.vx=rand(-.12,.12);p.vy=rand(.8,1.5);
+    p.char=glyph();p.angle=rand(-.5,.5);p.spin=rand(-.01,.01);
+  }
+  function resize() {
     const dpr=Math.min(devicePixelRatio||1,2);
     W=innerWidth;H=innerHeight;
     layer.width=Math.round(W*dpr);layer.height=Math.round(H*dpr);
     ctx.setTransform(dpr,0,0,dpr,0,0);
-    surfaces=[];surfaces=getSurfaces();slides=[];
-    const count=W<700?110:240;
-    flakes=Array.from({length:count},()=>({x:rand(0,W),y:rand(-H,H),vy:rand(.65,1.35),vx:rand(-.16,.16),char:choose(),alpha:rand(.45,.85)}));
+    targets=[];updateTargets();debris=[];
+    falling=Array.from({length:W<700?125:265},()=>makeParticle());
   }
-  function spawn(f) {
-    const panel=surfaces.find(s=>!s.isTitle);
-    const title=surfaces.find(s=>s.isTitle);
-    const target=Math.random()<.68?panel:(Math.random()<.75?title:null);
-    f.x=target?rand(target.left+3,target.right-3):rand(0,W);
-    f.y=rand(-H*.45,-12);
-    f.vx=rand(-.14,.14);f.vy=rand(.7,1.35);f.char=choose();
+  function stackTop(t,i) {
+    const baseY=t.cols[i];
+    if(baseY===null)return -Infinity;
+    return baseY-t.stacks[i].length*7;
   }
-  function release(s,col) {
-    if(col<0||col>=s.n||!s.heights[col])return;
-    s.heights[col]--;
-    const char=s.chars[col].pop()||choose();
-    const dir=col<s.center?-1:1;
-    slides.push({x:s.left+(col+.5)*cell,y:s.top-(s.heights[col]+1)*cell,
-      vx:dir*rand(.8,1.5),vy:rand(-.25,.1),char,life:160});
+  function spill(t,i) {
+    const pile=t.stacks[i];if(!pile.length)return;
+    const item=pile.pop();
+    const dir=i<t.n/2?-1:1;
+    debris.push({...item,x:t.left+(i+.5)*STEP,y:stackTop(t,i)-3,
+      vx:dir*rand(.7,1.7),vy:rand(-.5,.25),spin:rand(-.055,.055),life:210});
   }
-  function settle(s,x,char) {
-    let col=Math.floor((x-s.left)/cell);
-    if(col<0||col>=s.n)return;
-    // Deposit onto the lower neighboring stack; this makes a dense filled surface.
-    const options=[col-1,col,col+1].filter(i=>i>=0&&i<s.n);
-    col=options.reduce((best,i)=>s.heights[i]<s.heights[best]?i:best,col);
-    const distance=Math.abs(col-s.center)/Math.max(1,s.center);
-    const limit=Math.max(2,Math.round(s.maxHeight*(1-.87*distance)));
-    if(s.heights[col]>=limit){
-      // Only overflow at a full pile, not on every arriving character.
-      if(Math.random()<.12) release(s,col);
+  function land(t,i,p) {
+    const valid=[i-1,i,i+1].filter(j=>j>=0&&j<t.n&&t.cols[j]!==null);
+    if(!valid.length)return;
+    // Prefer lower neighboring stacks while retaining an uneven, overlapping surface.
+    const j=valid.reduce((best,k)=>stackTop(t,k)>stackTop(t,best)?k:best,valid[0]);
+    const normalized=Math.abs(j-(t.n-1)/2)/Math.max(1,(t.n-1)/2);
+    const limit=t.id==='title'?2:Math.max(2,Math.round(t.cap*(1-.83*normalized)));
+    if(t.stacks[j].length>=limit) {
+      if(Math.random()<.18)spill(t,j);
       return;
     }
-    s.chars[col].push(char);s.heights[col]++;
+    t.stacks[j].push({char:p.char,size:rand(8,12),angle:rand(-1.1,1.1),
+      dx:rand(-3.2,3.2),dy:rand(-2,1),alpha:rand(.68,.97)});
   }
-  function evolve(s) {
-    // Avalanche only after a genuinely tall mound has formed.
-    const peak=Math.max(...s.heights);
-    if(peak<s.maxHeight-1 || frame%5!==0)return;
-    const col=Math.floor(rand(0,s.n));
-    const dir=col<s.center?-1:1,next=col+dir;
-    if(next<0||next>=s.n){if(s.heights[col]>1)release(s,col);return;}
-    if(s.heights[col]-s.heights[next]>=3){
-      const ch=s.chars[col].pop()||choose();s.heights[col]--;
-      if(s.heights[next]<s.maxHeight){s.chars[next].push(ch);s.heights[next]++;}
-      else release(s,col);
+  function avalanche(t) {
+    if(frame%4!==0)return;
+    const max=Math.max(0,...t.stacks.map(s=>s.length));
+    if(max<Math.min(t.cap,5))return;
+    for(let attempt=0;attempt<2;attempt++) {
+      const i=Math.floor(rand(0,t.n));
+      if(t.cols[i]===null||!t.stacks[i].length)continue;
+      const dir=i<t.n/2?-1:1, j=i+dir;
+      if(j<0||j>=t.n||t.cols[j]===null) {if(Math.random()<.15)spill(t,i);continue;}
+      const top=stackTop(t,i),next=stackTop(t,j);
+      if(next-top>STEP*1.3) {
+        const item=t.stacks[i].pop();
+        t.stacks[j].push({...item,angle:item.angle+rand(-.4,.4)});
+      }
     }
-    if(frame%35===0 && Math.random()<.4){
-      const edge=Math.random()<.5?0:s.n-1;
-      for(let i=0;i<3;i++)release(s,Math.max(0,Math.min(s.n-1,edge+(edge===0?i:-i))));
+    if(frame%75===0) {
+      const populated=t.stacks.map((s,i)=>s.length>0?i:-1).filter(i=>i>=0);
+      if(populated.length) for(let k=0;k<3;k++)spill(t,populated[Math.floor(Math.random()*populated.length)]);
     }
   }
   function tick() {
     frame++;
-    surfaces=getSurfaces();
-    for(const s of surfaces)evolve(s);
-    for(const f of flakes){
-      const oldY=f.y;f.x+=f.vx;f.y+=f.vy*2;
-      let landed=false;
-      for(const s of surfaces){
-        if(f.x<s.left||f.x>=s.right)continue;
-        const col=Math.floor((f.x-s.left)/cell);
-        if(col<0||col>=s.n)continue;
-        const peak=s.top-s.heights[col]*cell;
-        if(oldY<=peak&&f.y>=peak){settle(s,f.x,f.char);spawn(f);landed=true;break;}
+    if(frame%20===0)updateTargets();
+    targets.forEach(avalanche);
+    for(const p of falling) {
+      const prev=p.y;
+      p.x+=p.vx;p.y+=p.vy*2;p.angle+=p.spin;
+      let hit=false;
+      for(const t of targets) {
+        if(p.x<t.left||p.x>=t.right)continue;
+        const i=Math.floor((p.x-t.left)/STEP);
+        if(i<0||i>=t.n||t.cols[i]===null)continue;
+        const top=stackTop(t,i);
+        if(prev<=top&&p.y>=top) {land(t,i,p);respawn(p);hit=true;break;}
       }
-      if(!landed&&(f.y>H+20||f.x<0||f.x>W))spawn(f);
+      if(!hit&&(p.y>H+20||p.x<0||p.x>W))respawn(p);
     }
-    for(let i=slides.length-1;i>=0;i--){
-      const p=slides[i];p.vy=Math.min(p.vy+.09,3.8);
-      p.x+=p.vx;p.y+=p.vy;p.life--;
-      if(p.life<=0||p.y>H+20)slides.splice(i,1);
+    for(let i=debris.length-1;i>=0;i--) {
+      const p=debris[i];p.vy=Math.min(4,p.vy+.08);
+      p.x+=p.vx;p.y+=p.vy;p.angle+=p.spin;p.life--;
+      if(p.life<=0||p.y>H+30)debris.splice(i,1);
     }
   }
-  function draw(){
+  function drawGlyph(p,x,y,alpha=1) {
+    ctx.save();ctx.translate(x,y);ctx.rotate(p.angle);
+    ctx.font=`${p.size}px monospace`;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle=`rgba(57,187,209,${(p.alpha||.85)*alpha})`;
+    ctx.fillText(p.char,0,0);ctx.restore();
+  }
+  function draw() {
     ctx.clearRect(0,0,W,H);
-    ctx.font=`${cell}px monospace`;ctx.textAlign='center';
-    for(const f of flakes){
-      if(surfaces.some(s=>f.x>s.left&&f.x<s.right&&f.y>s.top&&f.y<s.bottom))continue;
-      ctx.fillStyle=`rgba(57,187,209,${f.alpha})`;ctx.fillText(f.char,f.x,f.y);
+    for(const p of falling) {
+      // Do not draw falling glyphs on top of the white panel.
+      const panel=targets.find(t=>t.id==='panel');
+      if(panel){const r=bounds(panel.el);if(p.x>r.left&&p.x<r.right&&p.y>r.top&&p.y<r.bottom)continue;}
+      drawGlyph(p,p.x,p.y);
     }
-    for(const s of surfaces)for(let col=0;col<s.n;col++)for(let row=0;row<s.heights[col];row++){
-      ctx.fillStyle=row===s.heights[col]-1?'#9cecff':'rgba(57,187,209,.85)';
-      ctx.fillText(s.chars[col][row]||'0',s.left+(col+.5)*cell,s.top-(row+.2)*cell);
+    for(const t of targets)for(let i=0;i<t.n;i++) {
+      const base=t.cols[i];if(base===null)continue;
+      for(let k=0;k<t.stacks[i].length;k++) {
+        const p=t.stacks[i][k];
+        drawGlyph(p,t.left+(i+.5)*STEP+p.dx,base-(k+.5)*7+p.dy);
+      }
     }
-    for(const p of slides){ctx.fillStyle='rgba(92,220,240,.9)';ctx.fillText(p.char,p.x,p.y);}
+    for(const p of debris)drawGlyph(p,p.x,p.y);
   }
-  function animate(now){raf=requestAnimationFrame(animate);if(now-last<33)return;last=now;tick();draw();}
-  function restart(){if(raf!==null)cancelAnimationFrame(raf);raf=null;reset();if(!reduced.matches&&!document.hidden)raf=requestAnimationFrame(animate);}
+  function animate(time) {
+    raf=requestAnimationFrame(animate);
+    if(time-last<33)return;
+    last=time;tick();draw();
+  }
+  function restart() {
+    if(raf)cancelAnimationFrame(raf);raf=0;
+    resize();if(!reduced.matches&&!document.hidden)raf=requestAnimationFrame(animate);
+  }
   addEventListener('resize',restart);
-  document.addEventListener('visibilitychange',()=>{if(document.hidden){if(raf!==null)cancelAnimationFrame(raf);raf=null;}else restart();});
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){if(raf)cancelAnimationFrame(raf);raf=0;}else restart();});
   reduced.addEventListener('change',restart);
+  if(document.fonts&&document.fonts.ready)document.fonts.ready.then(restart);
   restart();
 })();
